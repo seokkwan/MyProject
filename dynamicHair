@@ -1,0 +1,514 @@
+# -*- coding: utf-8 -*
+
+'''
+File: dynamicHair.py
+
+Author: Lee Seok Kwan
+
+Contact: leesk004@naver.com
+
+Versions:
+1.0 - 06/11/2014 - first version created
+2.0 - 13/01/2015 - 컨트롤러 radius, axis 설정 제거.
+                 -  컨트롤러 로테이트, 스케일 조정 UI 수정.
+3.0 - 12/02/2015 - pm.runtime.MakeCurvesDynamic ---> pm.mel.eval('makeCurvesDynamic 2 { "0", "0", "1", "1", "0"}') 로 수정
+                 - pm.runtime.MakeCurvesDynamic 로 실행 했을때 nucleus 에 시작 프레임 문제가 발생
+
+How to use:
+1. Place script in :
+    C:/Users/yourUserName/Documents/maya/2013-x64/scripts/
+
+2. workflow:
+    1. 다이나믹 헤어 핸들링 컨트롤러를 만든다.
+    2. 다이나믹 헤어 Curve 에 CVs 값 조정
+    3. Create HairDynamic 실행
+    4. IK, FK Controller 선택 후에 rotate, scale, 각 Button 실행(Angle, Size 조정)
+3. To run tool:
+    import dynamicHair
+    reload(dynamicHair)
+    dynamicHair.dynamicHairExe()
+'''
+
+import pymel.core as pm
+import re
+
+class DynamicHair:
+    def __init__(self):
+        self.winName = 'createHairDynamic'
+        if pm.window(self.winName, q=True, ex=True) :
+            pm.deleteUI(self.winName)
+        with pm.window(self.winName, title=u'헤어다이나믹 조인트'):
+            with pm.autoLayout():
+                pm.separator(style='in', h=5)
+                # 다이나믹 컨트롤러 만들기
+                with pm.columnLayout(adj=True, cat=('both', 10)):
+                    with pm.rowColumnLayout(nc=4, cw=[(1, 65), (2, 130), (3, 90)],
+                                            cat=[(1, 'both', 2), (2, 'both', 2), (3, 'both', 2)]):
+                        pm.text(label='Name : ', align='right')
+                        self.textTF = pm.textField(text='_sim')
+                        pm.button(label='Make', command=self.makeText)
+                pm.separator(style='in', h=5)
+                with pm.columnLayout(adj=True, cat=('both', 10)):
+                    self.cvISG = pm.intSliderGrp(label='CVs : ', columnWidth=[(1, 65), (2, 40)],
+                                                 field=True, minValue=2, maxValue=10,
+                                                 fieldMinValue=2, fieldMaxValue=100, value=4)
+                # 스플라인 커브 설정
+                pm.separator(style='in', h=5)
+                # 다이나믹 헤어 조인트 실행
+                with pm.columnLayout(adj=True, cat=('both', 10)):
+                    pm.button(label=u'Create HairDynamic', h=40, command=self.createHairDynamic)
+                pm.separator(style='in', h=5)
+                # 컨트롤러 로테이트 조정
+                with pm.columnLayout(adj=True, cat=('both', 10)):
+                    self.ratateISG = pm.intSliderGrp(label='Rotate : ', columnWidth=[(1, 65), (2, 40)],
+                                                     field=True, minValue=-180, maxValue=180,
+                                                     fieldMinValue=-180, fieldMaxValue=180, value=90)
+                with pm.columnLayout(adj=True, cat=('both', 10)):
+                    with pm.horizontalLayout():
+                        pm.button(label='rotateX', command=pm.Callback(self.contRotate, 'rx'))
+                        pm.button(label='rotateY', command=pm.Callback(self.contRotate, 'ry'))
+                        pm.button(label='rotateZ', command=pm.Callback(self.contRotate, 'rz'))
+                pm.separator(style='in', h=5)
+                # 컨트롤러 스케일 조정
+                with pm.columnLayout(adj=True, cat=('both', 10)):
+                    self.scaleFSG = pm.floatSliderGrp(label='Scale : ', columnWidth=[(1, 65), (2, 40)],
+                                                     field=True, precision=2, minValue=0.1, maxValue=2,
+                                                     fieldMinValue=0.1, fieldMaxValue=10, value=0.5)
+                with pm.columnLayout(adj=True, cat=('both', 10)):
+                    with pm.horizontalLayout():
+                        pm.button(label='scaleX', command=pm.Callback(self.contScale, 'sx'))
+                        pm.button(label='scaleY', command=pm.Callback(self.contScale, 'sy'))
+                        pm.button(label='scaleZ', command=pm.Callback(self.contScale, 'sz'))
+                        pm.button(label='ALL', command=pm.Callback(self.contScale, 'sxyz'))
+                pm.separator(style='in', h=5)
+                self.nameText = pm.text(label='by Lee Seok Kwan', w=100, align='right')
+
+        pm.window(self.winName, e=True, h=300)
+        pm.showWindow(self.winName)
+
+    # CONTROLLER ROTATE EDIT
+    def contRotate(self, rotate_='ry'):
+        rotate_value = self.ratateISG.getValue()
+        selectObjects = pm.selected()
+        ro_axis = None
+        if rotate_ == 'rx':
+            ro_axis = [rotate_value, 0, 0]
+        if rotate_ == 'ry':
+            ro_axis = [0, rotate_value, 0]
+        if rotate_ == 'rx':
+            ro_axis = [0, 0, rotate_value]
+        if selectObjects:
+            for obj in selectObjects:
+                objShape = obj.getShape()
+                if objShape.type() == 'nurbsCurve':
+                    pm.select(objShape.cv[:])
+                    pm.rotate(ro_axis, r=True)
+        pm.select(clear=True)
+        pm.select(selectObjects)
+
+    # CONTROLLER SCALE EDIT
+    def contScale(self, scale_='sxyz'):
+        scale_value = self.scaleFSG.getValue()
+        selectObjects = pm.selected()
+        sx_axis = None
+        if scale_ == 'sx':
+            sx_axis = [scale_value, 1, 1]
+        if scale_ == 'sy':
+            sx_axis = [1, scale_value, 1]
+        if scale_ == 'sz':
+            sx_axis = [1, 1, scale_value]
+        if scale_ == 'sxyz':
+            sx_axis = [scale_value, scale_value, scale_value]
+
+        selectObjects = pm.selected()
+        if selectObjects:
+            for obj in selectObjects:
+                objShape = obj.getShape()
+                if objShape.type() == 'nurbsCurve':
+                    pm.select(objShape.cv[:])
+                    pm.scale(sx_axis, r=True)
+        pm.select(clear=True)
+        pm.select(selectObjects)
+
+    # CURVE RADIUS EDIT
+    def curveRadiusEdit(self, *args):
+        selectObjects = pm.selected()
+        if selectObjects:
+            try:
+                for obj in selectObjects:
+                    if obj.getShape().type() == 'nurbsCurve':
+                        obj.history()[1].radius.set(self.radiusFSG.getValue())
+            except:
+                pass
+        else:
+            pass
+
+    # CONTROLLER HIERARCHY PARENT
+    def controllerHierarchy(self, contList):
+        for i in range(1, len(contList)):
+            parentObj = pm.PyNode(contList[i-1])
+            childObj = pm.PyNode(contList[i]).root()
+            parentObj.addChild(childObj)
+
+    # CONTROLLER MAKE GROUP
+    def contrllerGrpConnect(self, contList, ikJoints):
+        for x in range(len(contList)):
+            cont = pm.PyNode(contList[x])
+            joint = pm.PyNode(ikJoints[x])
+            joint.rotate.connect(cont.getParent().rotate)
+
+    # CREATE HAIR DYNAMIC NUCLEUS
+    def createHairDynamic(self, *args):
+        topJoints = pm.selected(type='joint')
+        if self.dynamic_cont:simCont = self.dynamic_cont
+        else:simCont = pm.PyNode('{pre}_cont'.format(pre=self.textTF.getText()))
+        cvNum = self.cvISG.getValue()
+        contNum = cvNum / 2
+
+        if topJoints and simCont:
+            self.ikCurveGrp = []
+            self.cacheCurveGrp = []
+            self.manualCurveGrp = []
+            self.follicleCurveGrp = []
+            self.ikHandleGrp = []
+            self.hairCurveGrp = []
+            self.follicleShapeGrp = []
+            self.ikContGrp = []
+            self.fkContGrp = []
+            self.ik_cont_all = {}
+            self.fk_cont_all = {}
+            for jnt in topJoints:
+                # name
+                preName = re.sub('[^a-zA-Z]', '', jnt.partition('_')[0])
+                # create spline ikHandle
+                pm.select(jnt, hi=True)
+                ikJoints = pm.selected(type='joint')
+                createIKSolver = pm.ikHandle(sol='ikSplineSolver', ccv=True, pcv=False, sj=ikJoints[0], ee=ikJoints[-1], ns=cvNum)
+                self.ikCurve = createIKSolver[2].rename('{name}_ikCurve'.format(name=preName))
+                self.ikCurve.centerPivots()
+                # create FK Joint
+                fkJointList, contList = self.createFKJoint(jnt, preName, contNum)
+                self.ikContGrp.append(pm.PyNode('{pre}_g'.format(pre=contList[0])))
+                self.controllerHierarchy(contList)
+                self.ik_cont_all[preName] = contList
+                # create cache, maunal, follicle...curve
+                self.cacheCurve = self.ikCurve.duplicate()[0].rename('{name}_cacheCurve'.format(name=preName))
+                self.manualCurve = self.ikCurve.duplicate()[0].rename('{name}_manualCurve'.format(name=preName))
+                self.follicleCurve = self.ikCurve.duplicate()[0].rename('{name}_follicleCurve'.format(name=preName))
+                self.ikHandle = createIKSolver[0].rename('{name}_ikHandle'.format(name=preName))
+                # curve skinCluster, manualCurve, follicleCurve
+                pm.skinCluster(fkJointList, self.manualCurve, mi=3, nw=True, tsb=True)
+                pm.skinCluster(fkJointList, self.follicleCurve, mi=3, nw=True, tsb=True)
+                contList[0].addChild(jnt)
+                contList[0].addChild(fkJointList[0])
+                # add list
+                self.ikCurveGrp.append(self.ikCurve)
+                self.cacheCurveGrp.append(self.cacheCurve)
+                self.manualCurveGrp.append(self.manualCurve)
+                self.follicleCurveGrp.append(self.follicleCurve)
+                self.ikHandleGrp.append(self.ikHandle)
+                # split controller, joint
+                splitCont = self.splitJoint(jnt)
+                self.fkContGrp.append(pm.PyNode('{pre}_g'.format(pre=splitCont[0])))
+                self.contrllerGrpConnect(splitCont, ikJoints)
+                self.fk_cont_all[preName] = splitCont
+                pm.parentConstraint(contList[0], pm.PyNode(splitCont[0]).root())
+
+            # make dynmic curve
+            pm.select(self.follicleCurveGrp)
+            pm.mel.eval('makeCurvesDynamic 2 { "0", "0", "1", "1", "0"}')
+            for curve in self.follicleCurveGrp:
+                # name
+                preName = re.sub('[^a-zA-Z]', '', curve.partition('_')[0])
+                # follicleShape
+                follicle = curve.getParent()
+                follicleShape = follicle.getShape()
+                # follicle pointLock Set(Base)
+                follicleShape.pointLock.set(1)
+                # follicle reName
+                follicle.rename('{name}_follicle'.format(name=preName))
+                # hairCurve reName
+                hairCurve = follicleShape.outputs()[1].rename('{name}_hairCurve'.format(name=preName))
+                self.hairCurveGrp.append(hairCurve)
+                self.follicleShapeGrp.append(follicleShape)
+            # rename
+            hairCurveAllGrp = self.hairCurveGrp[0].root()
+            folliceAllGrp = self.follicleShapeGrp[0].root()
+            hairCurveAllGrp.rename('{name}_{suffix}'.format(name=simCont.partition('_')[0], suffix=hairCurveAllGrp))
+            folliceAllGrp.rename('{name}_{suffix}'.format(name=simCont.partition('_')[0], suffix=folliceAllGrp))
+
+            '''
+            #method
+
+            def hairDynamicAttr(self, cont)
+            def hairDynamicAttrConnect(self, cont, follicleShape, preName)
+            def curveBlendShape(self, manualCurveGrp, hairCurveGrp, cacheCurveGrp, ikCurveGrp, cont)
+
+            '''
+            # hair dynamic controller add attribute
+            self.hairDynamicAttr(simCont)
+            # hair dynamic controller connect
+            hairSystemList = self.hairDynamicAttrConnect(simCont, self.follicleShapeGrp[0], simCont.partition('_')[0])
+            # hair curve blendShape
+            self.curveBlendShape(self.manualCurveGrp, self.hairCurveGrp, self.cacheCurveGrp, self.ikCurveGrp, simCont)
+            # cache curve quick sets
+            self.createQuickSets(self.cacheCurveGrp, preName='{pre}_cacheCurve'.format(pre=simCont.partition('_')[0]))
+
+            # ik joint quick sets
+            quickJointList = self.ikJointGetList(self.ikHandleGrp)
+            self.createQuickSets(quickJointList, preName='{pre}_bakeJoint'.format(pre=simCont.partition('_')[0]))
+
+            pm.select(self.manualCurveGrp, self.cacheCurveGrp, self.ikCurveGrp, self.ikHandleGrp, hairSystemList, hairCurveAllGrp, folliceAllGrp)
+            hair_dynamic_g = pm.group(n='{name}_hairDynamic_g'.format(name=simCont.partition('_')[0]))
+            pm.select(clear=True)
+            pm.select(self.ikContGrp)
+            ik_cont_g = pm.group(n='{name}_hairDynamic_IK_cont_g'.format(name=simCont.partition('_')[0]))
+            pm.select(clear=True)
+            pm.select(self.fkContGrp)
+            fk_cont_g = pm.group(n='{name}_hairDynamic_FK_cont_g'.format(name=simCont.partition('_')[0]))
+            pm.select(clear=True)
+            simCont.IK_controller_vis.connect(ik_cont_g.visibility)
+            simCont.FK_controller_vis.connect(fk_cont_g.visibility)
+            hair_dynamic_g.visibility.set(0)
+            hair_dynamic_g.visibility.setLocked(True)
+            ik_cont_list = []
+            for key in self.ik_cont_all.keys():
+                ik_cont_list += self.ik_cont_all[key]
+            fk_cont_list = []
+            for key in self.fk_cont_all.keys():
+                fk_cont_list += self.fk_cont_all[key]
+            self.createQuickSets(ik_cont_list, preName='{pre}_ikCont'.format(pre=simCont.partition('_')[0]))
+            self.createQuickSets(fk_cont_list, preName='{pre}_fkCont'.format(pre=simCont.partition('_')[0]))
+            pm.select(ik_cont_g, fk_cont_g, simCont.getParent())
+            pm.group(n='{name}_hairDynamic_all_cont_g'.format(name=simCont.partition('_')[0]))
+            pm.select(clear=True)
+        else:
+            pm.warning(u'조인트, 컨트롤러 다시 확인하세요~~')
+
+    # CREATE SPLIT JOINT
+    def splitJoint(self, topJoint):
+        pm.select(topJoint, hi=True)
+        hierarchyJoints = pm.selected(type='joint')
+        createContGrp = []
+        for i, jnt in enumerate(hierarchyJoints[:-1]):
+            pm.select(clear=True)
+            createJoint = pm.joint(n='{name}_j'.format(name=jnt.partition('_')[0]))
+            createCont = pm.curve(p=[(3.11827, 3.11827, 3.11827), (3.11827, 3.11827, -3.11827),
+                                     (-3.11827, 3.11827, -3.11827), (-3.11827, 3.11827, 3.11827),
+                                     (3.11827, 3.11827, 3.11827), (3.11827, -3.11827, 3.11827),
+                                     (-3.11827, -3.11827, 3.11827), (-3.11827, 3.11827, 3.11827),
+                                     (-3.11827, 3.11827, -3.11827), (-3.11827, -3.11827, -3.11827),
+                                     (-3.11827, -3.11827, 3.11827), (-3.11827, -3.11827, 3.11827),
+                                     (3.11827, -3.11827, 3.11827), (3.11827, -3.11827, -3.11827),
+                                     (-3.11827, -3.11827, -3.11827), (-3.11827, 3.11827, -3.11827),
+                                     (3.11827, 3.11827, -3.11827), (3.11827, -3.11827, -3.11827),
+                                     (3.11827, -3.11827, 3.11827), (3.11827, 3.11827, 3.11827)],
+                                  k=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19], d=1)
+            createCont.rename('{name}_cont'.format(name=jnt.partition('_')[0]))
+            self.overrideColorSet(createCont, num=23)
+            createCont.addChild(createJoint)
+            inGrp = pm.group(em=True, n='{name}_cont_in_g'.format(name=jnt.partition('_')[0]))
+            inGrp.addChild(createCont)
+            allGrp = pm.group(em=True, n='{name}_cont_g'.format(name=jnt.partition('_')[0]))
+            allGrp.addChild(inGrp)
+            pm.delete(pm.pointConstraint(jnt, allGrp, mo=False))
+            pm.delete(pm.orientConstraint(jnt, allGrp, mo=False))
+            createContGrp.append(createCont)
+            if i > 0:createContGrp[i-1].addChild(createContGrp[i].root())
+        return createContGrp
+
+    # CREATE FK JOINT
+    def createFKJoint(self, joint, preName, contNum):
+        pm.select(joint, hi=True)
+        hiJoint = pm.selected(type='joint')
+        jointAll = []
+        num=0
+        for x in range(0, len(hiJoint), contNum):
+            pm.select(clear=True)
+            spJoint = pm.joint(p=(0, 0, 0))
+            spJoint.rename('{name}_{count}_fk'.format(name=preName, count=num))
+            pm.delete(pm.pointConstraint(hiJoint[x], spJoint, mo=False))
+            pm.delete(pm.orientConstraint(hiJoint[x], spJoint, mo=False))
+            if not x == 0:
+                spJoint.setParent(jointAll[num - 1])
+            jointAll.append(spJoint)
+            num += 1
+        contAll = self.hairDynamicCont(jointAll, preName)
+        jointAll[0].visibility.set(0)
+        jointAll[0].visibility.setLocked(True)
+        return jointAll, contAll
+
+    # CURVE BLENDSHAPE CONNECT
+    def curveBlendShape(self, manualCurveGrp, hairCurveGrp, cacheCurveGrp, ikCurveGrp, cont):
+        hairCont = pm.PyNode(cont)
+        for x in range(len(ikCurveGrp)):
+            preName = re.sub('[^a-zA-Z]', '', ikCurveGrp[x].partition('_')[0])
+            # create blendShape
+            cacheBlend = pm.blendShape(manualCurveGrp[x], hairCurveGrp[x], cacheCurveGrp[x],
+                                       frontOfChain=True, name='{name}_cache_blendShape'.format(name=preName))[0]
+            ikHandleBlend = pm.blendShape(cacheCurveGrp[x], ikCurveGrp[x],
+                                          frontOfChain=True, name='{name}_IK_blendShape'.format(name=preName))[0]
+            # cacheBlend weight setDrivenKey
+            hairCont.enable.set(0)
+            cacheBlend.listAliases()[0][1].set(1)
+            cacheBlend.listAliases()[1][1].set(0)
+            pm.setDrivenKeyframe(cacheBlend.listAliases()[0][1], currentDriver=hairCont.enable)
+            pm.setDrivenKeyframe(cacheBlend.listAliases()[1][1], currentDriver=hairCont.enable)
+
+            hairCont.enable.set(1)
+            cacheBlend.listAliases()[0][1].set(0)
+            cacheBlend.listAliases()[1][1].set(1)
+            pm.setDrivenKeyframe(cacheBlend.listAliases()[0][1], currentDriver=hairCont.enable)
+            pm.setDrivenKeyframe(cacheBlend.listAliases()[1][1], currentDriver=hairCont.enable)
+            hairCont.enable.set(0)
+            # ikHandleBlend weight set
+            ikHandleBlend.listAliases()[0][1].set(1)
+
+    # CONTROLLER COLOR SET
+    def overrideColorSet(self, object, num = 1):
+        object.overrideEnabled.set(1)
+        object.overrideColor.set(num)
+
+    # HAIR DYNAMIC BASE CONTROLLER
+    def hairDynamicCont(self, getJoint, preName):
+        contAll = []
+        pm.select(clear=1)
+        for i, jnt in enumerate(getJoint):
+            createCont = pm.circle(center=(0, 0, 0), normal=(1, 0, 0),
+                                     sweep=360, radius=2, degree=3,
+                                     useTolerance=0, tolerance=0.01, sections=8, constructionHistory=1)[0]
+            pm.select(createCont)
+            pm.runtime.DeleteHistory()
+            createCont.rename('{name}_hairIK_{count}_cont'.format(name=preName, count=i))
+            self.overrideColorSet(createCont, num=18)
+            contGrp = pm.group(createCont, n='{name}_g'.format(name=createCont))
+            pm.delete(pm.pointConstraint(jnt, contGrp, mo=False))
+            pm.delete(pm.orientConstraint(jnt, contGrp, mo=False))
+            if i > 0:pm.parentConstraint(createCont, getJoint[i], mo=True)
+            contAll.append(createCont)
+        return contAll
+
+    # HAIR DYNAMIC ATTRIBUTE
+    def hairDynamicAttr(self, cont):
+        if cont.hasAttr('dynamic') or cont.hasAttr('attraction') or cont.hasAttr('controller'):
+            return False
+        cont.addAttr('dynamic', nn='___DYNAMIC___', at='enum', en='0:', keyable=True)
+        cont.setAttr('dynamic', channelBox=True, keyable=False)
+        cont.addAttr('enable', at='bool', k=True)
+        cont.addAttr('start_frame', at='double', dv=1, keyable=True)
+        cont.addAttr('stiffness', at='double', min=0, dv=0, keyable=True)
+        cont.addAttr('drag', at='double', min=0, dv=0.05, keyable=True)
+        cont.addAttr('motion_drag', at='double', min=0, dv=0, keyable=True)
+        cont.addAttr('damp', at='double', min=0, dv=0.1, keyable=True)
+        cont.addAttr('attraction', nn='___ATRACTION___', at='enum', en='0:', keyable=True)
+        cont.setAttr('attraction', channelBox=True, keyable=False)
+        cont.addAttr('attraction_start_value', at= 'double', min=0, max=1, dv=1, keyable=True)
+        cont.addAttr('attraction_end_value', at='double', min=0, max=1, dv=0.01, keyable=True)
+        cont.addAttr('attraction_start_position', at='double', min=0, max=1, dv=0.3, keyable=True)
+        cont.addAttr('attraction_end_position', at='double', min=0, max=1, dv=0.5, keyable=True)
+        cont.addAttr('attraction_damp', at='double', min=0, max=1, dv=0.1, keyable=True)
+        cont.addAttr('controller', nn='___CONTROLL___', at='enum', en='0:', keyable=True)
+        cont.setAttr('controller', channelBox=True, keyable=False)
+        cont.addAttr('IK_controller_vis', at='long', min=0, max=1, dv=1, keyable=True)
+        cont.addAttr('FK_controller_vis', at='long', min=0, max=1, dv=1, keyable=True)
+        # for comp in ['t', 'r', 's']:
+        #     for ch in ['x', 'y', 'z']:
+        #         cont.attr('{0}{1}'.format(comp, ch)).lock()
+        #         cont.attr('{0}{1}'.format(comp, ch)).setKeyable(False)
+
+    # HAIR DYNAMIC ATTRIBUTE CONTROLLER CONNECT
+    def hairDynamicAttrConnect(self, cont, follicleShape, preName):
+        hairShape = follicleShape.connections(shapes=True, type='hairSystem')[0]
+        hairCont = pm.PyNode(cont)
+        hairNucleus = hairShape.outputs()[0].rename('{name}_nucleus'.format(name=preName))
+        hairSystem = hairShape.getParent()
+        hairSystem.rename('{name}_hairSystem'.format(name=preName))
+        # enable
+        hairCont.enable.set(0)
+        hairShape.simulationMethod.set(1)
+        pm.setDrivenKeyframe('{0}.simulationMethod'.format(hairShape), currentDriver='{0}.enable'.format(hairCont))
+        hairCont.enable.set(1)
+        hairShape.simulationMethod.set(3)
+        pm.setDrivenKeyframe('{0}.simulationMethod'.format(hairShape), currentDriver='{0}.enable'.format(hairCont))
+        hairCont.enable.connect(hairNucleus.enable)
+        # start frame
+        hairCont.start_frame.connect(hairShape.startFrame, f=True)
+        hairCont.start_frame.connect(hairNucleus.startFrame, f=True)
+        # stiffness
+        hairCont.stiffness.connect(hairShape.stiffness, f=True)
+        # drag
+        hairCont.drag.connect(hairShape.drag, f=True)
+        # motion_drag
+        hairCont.motion_drag.connect(hairShape.motionDrag, f=True)
+        # damp
+        hairCont.damp.connect(hairShape.damp, f=True)
+        # attraction
+        hairShape.startCurveAttract.set(1)
+        hairCont.attraction_start_value.connect(hairShape.attractionScale[0].attractionScale_FloatValue, f=True)
+        hairCont.attraction_end_value.connect(hairShape.attractionScale[1].attractionScale_FloatValue, f=True)
+        hairCont.attraction_damp.connect(hairShape.attractionDamp, f=True)
+        hairCont.attraction_start_position.connect(hairShape.attractionScale[0].attractionScale_Position, f=True)
+        hairCont.attraction_end_position.connect(hairShape.attractionScale[1].attractionScale_Position, f=True)
+        hairSystemList = [hairSystem, hairNucleus]
+        return hairSystemList
+
+    # MAKE TEXT CONTROLLER
+    def makeText(self, *args):
+        self.dynamic_cont = None
+        getText = self.textTF.getText()
+        outFont = 'Impact|w400|h-11'
+        if getText == '':
+            pm.warning('Enter the controller name~~!!')
+            return False
+        text_curves= pm.textCurves(ch=False, f=outFont, t=getText)
+        pm.select(text_curves, hi=True)
+        selHi = pm.selected()
+        listCont = []
+        for sel in selHi:
+            if pm.nodeType(sel) == 'nurbsCurve':
+                curve = sel.getParent()
+                curve.setParent(world=True)
+                listCont.append(curve)
+        pm.select(clear=True)
+        rootCont = self.parents(listCont)
+        pm.select(rootCont)
+        pm.mel.eval('CenterPivot')
+        self.dynamic_cont = pm.rename(rootCont, '{name}_cont'.format(name=getText))
+        self.overrideColorSet(self.dynamic_cont, num=20)
+        pm.group(self.dynamic_cont, n='{name}_g'.format(name=self.dynamic_cont))
+        pm.delete(text_curves)
+        pm.mel.eval('CenterPivot')
+        self.hairDynamicAttr(self.dynamic_cont)
+        pm.select(clear=True)
+
+    # CONTROLLER SHAPE PARENTS
+    def parents(self, listCont):
+        pm.select(listCont)
+        pm.makeIdentity(apply=True, t=True, r=True, s=True, n=False)
+        rootCont = pm.PyNode(listCont[0])
+        for cont in listCont[1:]:
+            shape = pm.PyNode(cont).getShape()
+            pm.parent(shape, rootCont, r=True, s=True)
+            pm.delete(cont)
+        return rootCont
+
+    # IK JOINT GET LIST
+    def ikJointGetList(self, ikHandleList):
+        topJointGrp = []
+        for ikh in ikHandleList:
+            topJoint = ikh.inputs(type='joint')
+            topJointGrp.append(topJoint)
+        pm.select(topJointGrp, hi=True)
+        jointLists = sorted(pm.selected(type='joint'))
+        pm.select(clear=True)
+        return jointLists
+
+    # CREATE QUICK SELECT SETS
+    def createQuickSets(self, objLists, preName):
+        pm.select(objLists)
+        pm.sets(name='{name}_Set'.format(name=preName))
+
+def dynamicHairExe():
+    DynamicHair()
+
+# dynamicHairExe()
